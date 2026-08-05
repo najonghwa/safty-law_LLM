@@ -126,6 +126,11 @@
     padding:18px 22px; margin-bottom:12px; font-size:15px; white-space:pre-wrap}
   .refusebox{background:#faf1ef; border:1px solid #dcbfb6; border-left:3px solid #9a4a38;
     color:#7c3a2c; border-radius:0 8px 8px 0; padding:15px 20px; margin-bottom:12px; font-size:14px}
+  /* 근거 목록에서 진한 것(인용됨)과 흐린 것(참고)의 구분을 설명하는 줄 */
+  .legend{font-size:12px; color:var(--sub); margin:-3px 0 10px}
+  .legend b{color:var(--ink)}
+  .legend .dim{opacity:.55}
+  .legend span+span{margin:0 2px}
   .cite{display:inline-block; background:transparent; color:var(--accent);
     border:1px solid var(--accent); border-radius:3px; padding:0 6px; font-size:11.5px;
     font-weight:bold; cursor:pointer; margin:0 2px; letter-spacing:.03em}
@@ -185,7 +190,7 @@
 
   <div id="tab-ai">
     <div class="searchbox">
-      <input id="aiq" placeholder="자연어로 질문 — 예: 신규 화학물질을 도입하려면 어떤 절차가 필요한가요?" autocomplete="off" autofocus>
+      <input id="aiq" placeholder="예: DMA 보관 관련 인허가 검토사항은?" autocomplete="off" autofocus>
       <button id="askbtn" onclick="doAsk()">질문</button>
     </div>
     <div class="aihint">DB에서 근거 조문을 찾으면 조항을 인용해 답하고, 못 찾으면
@@ -432,7 +437,10 @@ async function doAsk(){
       if(d.checklist && d.checklist.length)
         html += `<div class="checkbox2"><h3>실무 체크리스트</h3><ul>` +
           d.checklist.map(c=>`<li>${citeHtml(c)}</li>`).join("") + `</ul></div>`;
-      html += `<div class="checkbox2"><h3>근거 조문 — 번호 클릭 시 전문</h3>${sourcesHtml(d.sources, d.cited_idx)}</div>`;
+      html += `<div class="checkbox2"><h3>근거 조문 — 번호 클릭 시 전문</h3>
+        <div class="legend"><b>진하게</b> 답변에 인용된 조문 <span>·</span>
+          <span class="dim">흐리게</span> 함께 검색된 참고 조문(답변에는 쓰이지 않음)</div>
+        ${sourcesHtml(d.sources, d.cited_idx)}</div>`;
       html += `<div class="aihint">본 답변은 수집된 조문 기반 참고용입니다. 법적 판단 전 원문과 소관 부처 확인이 필요합니다.</div>`;
     } else if(d.mode === "general"){
       html += `<div class="badge-warn">DB 미확인 — AI 일반 지식 답변</div>`;
