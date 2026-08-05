@@ -27,6 +27,8 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             out = api.route(u.path.rstrip("/"), parse_qs(u.query), body or {})
             code = 200
+        except api.NotFound as e:
+            out, code = {"error": "not found", "path": str(e)}, 404
         except Exception as e:
             out, code = {"error": f"{type(e).__name__}: {e}"}, 500
         payload = json.dumps(out, ensure_ascii=False).encode("utf-8")

@@ -21,6 +21,10 @@ import _lib
 import _rag
 
 
+class NotFound(Exception):
+    """없는 주소·없는 조문 — 200에 에러 내용을 담아 보내면 호출측이 성공으로 오해한다."""
+
+
 def route(path, qs, body):
     if path.endswith("/stats"):
         d = _lib.api_stats()
@@ -32,7 +36,9 @@ def route(path, qs, body):
         return _lib.api_law_articles(int(qs.get("law_id", ["0"])[0]))
     if path.endswith("/article"):
         a = _lib.api_article(int(qs.get("id", ["0"])[0]))
-        return a if a else {"error": "not found"}
+        if not a:
+            raise NotFound(f"article {qs.get('id', [''])[0]}")
+        return a
     if path.endswith("/search"):
         return _lib.api_search(qs.get("q", [""])[0], qs.get("tier", [""])[0])
     if path.endswith("/substance"):
@@ -52,7 +58,7 @@ def route(path, qs, body):
         d = _rag.ask(q, fts, subs)
         d["plan"] = plan
         return d
-    return {"error": "unknown endpoint", "path": path}
+    raise NotFound(path)
 
 
 class handler(BaseHTTPRequestHandler):
@@ -69,6 +75,8 @@ class handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         try:
             self._send(route(u.path.rstrip("/"), parse_qs(u.query), body or {}))
+        except NotFound as e:
+            self._send({"error": "not found", "path": str(e)}, 404)
         except Exception as e:
             self._send({"error": f"{type(e).__name__}: {e}"}, 500)
 
