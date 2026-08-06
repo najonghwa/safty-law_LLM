@@ -247,43 +247,62 @@ def cas_valid(cas):
     return sum(int(x) * (i + 1) for i, x in enumerate(reversed(d[:-1]))) % 10 == int(d[-1])
 
 
-def find_substance_rows(*terms):
-    con = db()
-    rows, seen = [], set()
+def find_substance_rows(question, *precise):
+    """물질의 규제 목록 등재 내역을 찾는다. 근거의 신뢰도 순으로 돌려준다.
 
-    def add(rs):
+    question은 사용자가 쓴 원문이라 약어가 섞인다. precise는 LLM이 확정한
+    정식명칭·CAS다. 같은 '이름 부분일치'라도 어느 쪽에서 나왔는지로 신뢰도가 다르다.
+
+      0 CAS 완전일치            2 확정명 부분일치        4 질문어 부분일치
+      1 확정명 완전일치          3 질문어 완전일치        5 별표 본문 부분일치
+
+    짧은 약어를 확정명과 똑같이 믿으면 다른 물질이 근거로 올라간다 — "DMA"로 찾으면
+    "디엠에이비 [DMAB]"가 걸리고, LLM이 DMA를 디메틸아민 보란으로 설명하게 된다.
+    확실한 근거가 충분하면 아래 등급은 아예 버린다.
+    """
+    con = db()
+    seen, buckets = set(), {i: [] for i in range(6)}
+
+    def add(rank, rs):
         for r in rs:
             k = (r["law_name"], r["annex"], r["context"][:80])
             if k not in seen:
                 seen.add(k)
-                rows.append(dict(r))
+                buckets[rank].append(dict(r))
 
     syn = load_synonyms()
-    for t in terms:
+    for t, base in [(question, 3)] + [(p, 1) for p in precise]:
         t = (t or "").strip()
         if not t:
             continue
-        for cas in CAS_RE.findall(t):
+        for cas in CAS_RE.findall(t):      # CAS는 어디서 나왔든 모호하지 않다
             if cas_valid(cas):
-                add(con.execute("SELECT law_name,annex,context FROM substances WHERE cas=?",
-                                (cas,)))
+                add(0, con.execute("SELECT law_name,annex,context FROM substances WHERE cas=?",
+                                   (cas,)))
         toks = re.split(r"\s+", t)
         for w in list(toks):
             toks += syn.get(re.sub(r"(의|을|를|이|가|은|는|과|와|으로|로)$", "", w), [])
         for tok in toks:
             tok = re.sub(r"(의|을|를|이|가|은|는|과|와|으로|로)$", "", tok)
-            if len(tok) >= 3 and not CAS_RE.search(tok):
-                add(con.execute("SELECT law_name,annex,context FROM substances"
-                                " WHERE name = ? LIMIT 30", (tok,)))
-                add(con.execute("SELECT law_name,annex,context FROM substances"
-                                " WHERE name LIKE ? LIMIT 30", (f"%{tok}%",)))
-                add(con.execute("SELECT law_name,annex,context FROM substances"
-                                " WHERE context LIKE ? LIMIT 30", (f"%{tok}%",)))
+            if len(tok) < 3 or CAS_RE.search(tok):
+                continue
+            add(base, con.execute("SELECT law_name,annex,context FROM substances"
+                                  " WHERE name = ? LIMIT 30", (tok,)))
+            add(base + 1, con.execute("SELECT law_name,annex,context FROM substances"
+                                      " WHERE name LIKE ? LIMIT 30", (f"%{tok}%",)))
+            add(5, con.execute("SELECT law_name,annex,context FROM substances"
+                               " WHERE context LIKE ? LIMIT 30", (f"%{tok}%",)))
     con.close()
 
-    def prio(r):
+    def prio(r):   # 같은 등급 안에서는 지정 목록 > 규정수량 > 그 밖
         a = r.get("annex", "")
         return 0 if ("지정 목록" in a or "지정" in a) else (1 if "규정수량" in a else 2)
+
+    rows = []
+    for rank in range(6):                  # 위 등급으로 3건이 차면 아래는 안 본다
+        if len(rows) >= 3:
+            break
+        rows += buckets[rank]
     rows.sort(key=prio)
     return rows[:20]
 
