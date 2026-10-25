@@ -57,6 +57,14 @@ SYSTEM_PROMPT = """당신은 한국 안전·환경 법규 검색 어시스턴트
 - 근거 조문이나 [규제 목록 대조 결과]에 그 물질의 정식명칭이 나와 있으면 **그 표기 그대로** 쓰십시오.
 - 근거 어디에도 정식명칭이 없으면 **질문에 쓰인 약어를 그대로** 두십시오(예: "DMA").
   괄호를 붙여 풀어 쓰거나 다른 이름으로 바꾸지 마십시오.
+
+부칙·시행예정 (중요):
+- 근거 제목이 "부칙 …"인 것은 시행일·경과조치·적용례입니다. "언제부터 적용되나", "기존에 받은
+  허가는 어떻게 되나" 같은 질문에는 부칙을 근거로 시점을 분명히 답하십시오. 다만 의무 자체의
+  근거는 본문 조문이고, 부칙은 그 적용 시점을 정합니다.
+- 법령명에 "(시행예정 YYYY-MM-DD)"가 붙었거나 제목에 "[시행…]" 표시가 있는 근거는 아직 시행 전인
+  규정입니다. 반드시 "○○○○년 ○월 ○일 시행 예정"임을 밝히고 현행 규정과 구분하십시오.
+- 근거 제목이 "서식 …"/"별지 …"인 것은 신청서 양식입니다. 양식에 적을 항목·첨부서류를 물을 때만 쓰십시오.
 - 다만 질문이 **안전·보건·환경 법규와 무관한 주제**(요리, 날씨, 사내 인사·급여·연차 규정,
   일반 상식 등)이면, 조문이 붙어 있더라도 억지로 엮지 말고 answer를 정확히
   "제공된 조문으로는 확인 불가"로 하십시오. 이 DB는 안전·보건·환경 법령만 담고 있습니다."""
@@ -71,7 +79,10 @@ QUERY_PROMPT = """당신은 한국 안전·환경 법령 검색을 돕습니다.
 2. 물질명은 **국문 정식명칭과 이명(異名)을 모두** 넣으십시오. 알고 있으면 CAS 번호도.
 3. 조사·어미·의문사는 빼고 명사 위주로. 각 검색어는 2~5단어 이내.
 4. 검색어 3~6개. 넓은 것부터 좁은 것 순으로.
-5. JSON만 출력:
+5. 시점·경과 질문(언제부터 적용되나, 개정 전에 받은 허가는, 기존 시설은, 유예기간)이면 검색어에
+   **"경과조치"·"시행일"·"적용례"**를 반드시 넣으십시오. 그 내용은 본문이 아니라 부칙에만 있고,
+   부칙은 그 말로만 검색됩니다. "유효기간"·"지속성" 같은 일반어로는 안 잡힙니다.
+6. JSON만 출력:
 {"keywords": ["검색어1", "검색어2", ...], "substance": "질문에 나온 물질의 법령상 정식명칭 또는 null", "cas": "CAS번호 또는 null"}
 
 예시)
@@ -79,7 +90,10 @@ QUERY_PROMPT = """당신은 한국 안전·환경 법령 검색을 돕습니다.
 {"keywords": ["불화수소 사고대비물질", "플루오르화수소", "사고대비물질 지정"], "substance": "불화수소", "cas": "7664-39-3"}
 
 질문: "폐액은 어떻게 버려야 하나요?"
-{"keywords": ["지정폐기물 처리", "사업장폐기물 배출자 의무", "폐기물 위탁처리"], "substance": null, "cas": null}"""
+{"keywords": ["지정폐기물 처리", "사업장폐기물 배출자 의무", "폐기물 위탁처리"], "substance": null, "cas": null}
+
+질문: "개정 전에 받은 유해화학물질 영업허가는 계속 유효한가요?"
+{"keywords": ["유해화학물질 영업허가 경과조치", "영업허가 시행일", "종전 규정에 따라 허가를 받은 자"], "substance": null, "cas": null}"""
 
 GENERAL_PROMPT = """당신은 한국 안전·보건·환경 실무를 돕는 어시스턴트입니다.
 
@@ -132,6 +146,8 @@ def _sources_payload(articles):
             link = ""
         elif a["kind"] == "admrul":
             link = a["source_url"]
+        elif not a["jo_short"] or a["jo_short"].startswith(("부칙", "서식", "별지")):
+            link = a["source_url"]          # 부칙·서식은 조 단위 주소가 없다
         else:
             link = a["source_url"] + "/" + urllib.parse.quote(a["jo_short"])
         out.append({"idx": i, "article_id": a["article_id"], "law_name": a["law_name"],
@@ -203,17 +219,17 @@ def build_review_question(topic_id, product):
     return (q + (f" (용도: {usage})" if usage else "")).strip()
 
 
-def select_sources(fts_results, k=TOP_K):
+def select_sources(fts_results, k=TOP_K, question=""):
     """검색 순서(검색어별 라운드로빈)는 그대로 두고 법령 위계로만 안정 정렬한다.
 
     별표는 세부 기준이라 유용하지만 의무의 근거는 조문에 있으므로 조문을 앞에 둔다.
     """
-    return sorted(fts_results, key=rank_source)[:k]
+    return sorted(fts_results, key=lambda r: rank_source(r, question))[:k]
 
 
 def ask(question, fts_results, substance_rows=None):
     """질문 + 검색결과 → 근거 기반 답변, 또는 일반 답변으로 전환."""
-    merged = [r["article_id"] for r in select_sources(fts_results)]
+    merged = [r["article_id"] for r in select_sources(fts_results, question=question)]
 
     if not merged and not substance_rows:       # 게이트 1
         return _general_answer(question)

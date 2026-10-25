@@ -74,6 +74,10 @@ CASES = [
     # ── 현장 용어 (동의어 확장 확인) ──
     ("폐액은 어떻게 버려야 하나요?", "폐기물관리법", None),
     ("MSDS 게시 안 하면 처벌받나요?", "산업안전보건법", None),
+
+    # ── 부칙·서식 (2026-10 수록) ──
+    ("화관법 개정 전에 받은 유해화학물질 영업허가는 계속 유효한가요?", "화학물질관리법", "부칙"),
+    ("유해화학물질 영업허가 신청서에는 무엇을 적나요?", "화학물질관리법 시행규칙", "서식"),
 ]
 
 # 근거 없어야 정상 (조문으로 억지로 엮지 않아야 함)
@@ -99,7 +103,7 @@ def run(search_only=False):
         plan = {} if search_only else _rag.plan_query(q)
         fts = _lib.search_for_question(q, plan=plan)
         subs = _lib.find_substance_rows(q, plan.get("substance"), plan.get("cas"))
-        arts = _rag._fetch_articles([r["article_id"] for r in _rag.select_sources(fts)])
+        arts = _rag._fetch_articles([r["article_id"] for r in _rag.select_sources(fts, question=q)])
         names, jos = [a["law_name"] for a in arts], [a["jo_label"] for a in arts]
 
         hit = (any(want_law in n for n in names) or bool(subs)) and \

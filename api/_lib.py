@@ -66,17 +66,29 @@ def expand_query(q):
     return variants[:8], notes
 
 
-def rank_source(r):
-    """근거 우선순위: 법률 조문 > 시행령·규칙 > 별표 > KOSHA 지침.
+FORM_Q_RE = re.compile("서식|신청서|양식|별지|제출서류|첨부서류|작성해야")
+TIMING_Q_RE = re.compile("경과조치|시행일|언제부터|개정 전|개정전|유예|종전|계속 유효|소급|적용례")
+
+
+def rank_source(r, question=""):
+    """근거 우선순위: 법률 조문 > 시행령·규칙 조문 > 부칙 > 별표 > 서식 > KOSHA 지침.
 
     같은 등급 안의 순서는 건드리지 않는다(검색어별 라운드로빈 순서를 그대로 살린다).
     """
-    tier, label = r.get("tier", ""), r.get("jo_label", "")
+    tier, label, name = r.get("tier", ""), r.get("jo_label", ""), r.get("law_name", "")
     if tier == "KOSHA":
         return 3
-    if label.startswith("별표") or label.startswith("별지"):
+    if label.startswith("서식") or label.startswith("별지"):
+        # 신청서 양식 — 의무의 근거가 아니라 뒤로. 단, 양식 자체를 물었으면 앞으로.
+        return 0.5 if FORM_Q_RE.search(question) else 2.5
+    if label.startswith("별표"):
         return 2
-    return 0 if tier == "법률" else 1
+    if label.startswith("부칙"):
+        # 시행일·경과조치 — "언제부터", "기존 허가는" 류 질문이면 앞으로, 아니면 본문 뒤.
+        base = 0.5 if TIMING_Q_RE.search(question) else 1.5
+    else:
+        base = 0 if tier == "법률" else 1
+    return base + (0.25 if "(시행예정" in name else 0)   # 시행예정 판은 같은 등급의 현행 뒤
 
 
 def _search_one(con, q, tier="", limit=60):
@@ -94,7 +106,7 @@ def _search_one(con, q, tier="", limit=60):
                " FROM articles_fts f JOIN articles a ON a.article_id=f.rowid"
                " JOIN laws l ON l.law_id=a.law_id"
                " WHERE articles_fts MATCH ?" + short_sql + tier_sql +
-               " ORDER BY bm25(articles_fts, 8.0, 4.0, 1.0) LIMIT ?")
+               " ORDER BY bm25(articles_fts, 8.0, 4.0, 1.0) + (CASE WHEN a.jo_short='부칙' THEN 4.0 WHEN a.chapter='서식' THEN 6.0 ELSE 0.0 END) LIMIT ?")
         params = [match] + [f"%{t}%" for t in short] + ([tier] if tier else []) + [limit]
         try:
             rows = [dict(r) for r in con.execute(sql, params).fetchall()]
@@ -115,15 +127,16 @@ def _search_one(con, q, tier="", limit=60):
 
 
 def deep_link(r):
-    name = r.get("law_name", "")
+    name = r.get("law_name", "").split(" (시행예정")[0]     # 시행예정 판도 같은 법령 페이지로
     if r.get("kind") == "kosha":
         return ""
     import urllib.parse
     base = "https://www.law.go.kr/" + urllib.parse.quote(
         ("행정규칙/" if r.get("kind") == "admrul" else "법령/") + name.replace(" ", ""))
-    if r.get("kind") == "admrul":
-        return base
-    return base + "/" + urllib.parse.quote(r.get("jo_short", ""))
+    jo = r.get("jo_short", "")
+    if r.get("kind") == "admrul" or not jo or jo.startswith(("부칙", "서식", "별지")):
+        return base                 # 고시·부칙·서식은 조 단위 주소가 없다
+    return base + "/" + urllib.parse.quote(jo)
 
 
 def api_search(q, tier="", limit=60):
@@ -147,10 +160,19 @@ _STOP = {"무엇", "무엇이", "무엇인가", "어떤", "어떻게", "어디",
          "받으려면", "하려면", "하려는데", "있나요", "있는지", "되나요", "될까요",
          "알려줘", "알려주세요", "궁금합니다", "궁금해", "해야", "하는지", "대해",
          "관련", "경우", "때는", "때에", "그리고", "또는", "우리", "저희", "회사"}
-_JOSA = re.compile(r"(을|를|이|가|은|는|의|에|에서|으로|로|와|과|도|만|까지|부터|에게|께|"
+# 겹친 조사(에는·으로는·에서도…)는 한 번에 떼야 한다 — "신청서에는"을 "신청서에"로만 떼면 트라이그램
+# 검색에서 "신청서에"라는 글자열을 요구하게 되어 서식이 한 건도 안 잡힌다(2026-10 발견).
+# 단, "영업허가"의 "가"처럼 명사 끝이 조사와 같은 글자인 경우는 구분할 수 없어 그대로 둔다 —
+# 과하게 떼어도 부분 문자열 검색이라 회수에는 지장이 없다.
+_JOSA = re.compile(r"(에서는|에서도|에서의|으로는|으로도|으로의|에게는|에게도|까지는|까지도|부터는|부터도|"
+                   r"에는|에도|에의|로는|로도|와는|과는|이란|란|"
+                   r"을|를|이|가|은|는|의|에|에서|으로|로|와|과|도|만|까지|부터|에게|께|"
                    r"이나|나|라도|든지|처럼|보다|마다|조차|밖에)$")
 _ENDING = re.compile(r"(하려면|하려는|하려고|해야|하는|한|할|합니다|해도|하고|하면|"
-                     r"되는|된|될|시|시에|중인|중)$")
+                     r"되는|된|될|시|시에|중인|중|나요|가요|까요|습니까|입니까|인가요|인지|한지|할지)$")
+
+
+TIMING_WORDS = {"개정", "전", "계속", "유효", "유효한", "종전", "이전", "시행", "언제", "적용", "유예", "소급"}
 
 
 def keywords_from_question(q):
@@ -189,6 +211,12 @@ def search_for_question(q, limit=30, plan=None):
             collect(plan["substance"], True)
 
     kws = keywords_from_question(q)
+    if TIMING_Q_RE.search(q):
+        # 시점·경과조치 질문 — 부칙은 "경과조치"라는 말로만 잡힌다. 시점을 뜻하는 말(개정·계속·종전…)과
+        # 법령 약칭(…법)을 뺀 핵심 명사 두 개에 "경과조치"를 붙여 한 번 더 찾는다.
+        core = [k for k in kws if k not in TIMING_WORDS and not k.endswith("법")][:2]
+        if core:
+            collect(" ".join(core + ["경과조치"]), True)
     if not kws:
         collect(q)
     else:
