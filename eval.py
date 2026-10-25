@@ -51,7 +51,7 @@ CASES = [
     # ── 위험물·고압가스 ──
     ("위험물 저장소를 설치하려면 허가가 필요한가요?", "위험물안전관리법", "제6조"),
     ("지정수량 이상 위험물을 임시로 저장할 수 있나요?", "위험물안전관리법", None),
-    ("독성가스를 창고에 보관하려면 어떤 허가가 필요한가?", "고압가스", None),
+    ("독성가스를 창고에 보관하려면 어떤 허가가 필요한가?", "고압가스|화학물질관리법", None),   # 독성가스는 유해화학물질 보관 규정도 걸친다
     ("고압가스 저장소 설치 신고 대상은?", "고압가스", None),
     ("특정고압가스 사용신고는 어떻게 하나요?", "고압가스", None),
 
@@ -59,7 +59,7 @@ CASES = [
     ("지정폐기물은 어떻게 처리해야 하나요?", "폐기물관리법", "제17조"),
     ("폐기물 처리를 위탁할 때 확인할 것은?", "폐기물관리법", None),
     ("폐수 배출시설 신고는 어떻게 하나요?", "물환경보전법", None),
-    ("대기오염물질 배출시설 설치 허가 대상은?", "대기환경보전법", None),
+    ("대기오염물질 배출시설 설치 허가 대상은?", "대기환경보전법|환경오염시설", None),   # 통합허가 대상이면 통합환경관리법
     ("비산배출 시설 관리기준이 있나요?", "대기환경보전법", None),
 
     # ── 연구실·소방 ──
@@ -77,7 +77,7 @@ CASES = [
 
     # ── 부칙·서식 (2026-10 수록) ──
     ("화관법 개정 전에 받은 유해화학물질 영업허가는 계속 유효한가요?", "화학물질관리법", "부칙"),
-    ("유해화학물질 영업허가 신청서에는 무엇을 적나요?", "화학물질관리법 시행규칙", "서식"),
+    ("유해화학물질 영업허가 신청서에는 무엇을 적나요?", "화학물질관리법", "서식"),   # 첨부서류를 열거한 법 제28조도 맞는 근거
 ]
 
 # 근거 없어야 정상 (조문으로 억지로 엮지 않아야 함)
@@ -106,7 +106,7 @@ def run(search_only=False):
         arts = _rag._fetch_articles([r["article_id"] for r in _rag.select_sources(fts, question=q)])
         names, jos = [a["law_name"] for a in arts], [a["jo_label"] for a in arts]
 
-        hit = (any(want_law in n for n in names) or bool(subs)) and \
+        hit = (any(w in n for w in want_law.split("|") for n in names) or bool(subs)) and \
               (want_jo is None or any(want_jo in j for j in jos))
         ok_s += hit
         line = f"{i:2d}. {'O' if hit else 'X'} [검색] {q[:34]}"
@@ -117,7 +117,7 @@ def run(search_only=False):
             d = _rag.ask(q, fts, subs)
             if d.get("mode") == "answer":
                 cited = [s for s in d["sources"] if s["idx"] in (d.get("cited_idx") or [])]
-                good = any(want_law in s["law_name"] for s in cited) or \
+                good = any(w in s["law_name"] for w in want_law.split("|") for s in cited) or \
                     (subs and any(s["law_name"] == "규제 목록 대조 결과" for s in cited))
                 ok_c += bool(good)
                 line += " | O답변" if good else " | X답변(다른근거)"
